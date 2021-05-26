@@ -1,0 +1,461 @@
+##############################################################################################################
+
+# Запуск ETL
+
+##############################################################################################################
+
+# Скачиваем образы:
+
+> docker pull puckel/docker-airflow
+Using default tag: latest
+latest: Pulling from puckel/docker-airflow
+bc51dd8edc1b: Pull complete
+dc4aa7361f66: Pull complete
+5f346cb9ea74: Pull complete
+a4f1efa8e0e8: Pull complete
+7e4812fc693b: Pull complete
+f46373e205f2: Pull complete
+3c982a1645fa: Pull complete
+c39994a04957: Pull complete
+8eece23a38e7: Pull complete
+Digest: sha256:e3012994e4e730dccf56878094ff5524bffbe347e5870832dd6f7636eb0292a4
+Status: Downloaded newer image for puckel/docker-airflow:latest
+docker.io/puckel/docker-airflow:latest
+
+
+# Создадим файл docker-compose.yml:
+
+version: "3"
+services:
+  db1:
+    image: "postgres:11"
+    container_name: "pg1"
+    ports:
+      - "5433:5432"
+    volumes:
+      - my_dbdata:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=root
+  db2:
+    image: "postgres:11"
+    container_name: "pg2"
+    ports:
+      - "54320:5432"
+    volumes:
+      - my_dbdata:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=root
+  airflow:
+    image: puckel/docker-airflow
+    container_name: "airflow"
+    ports:
+      - "8080:8080"
+    environment:
+      - PYTHONPATH=/usr/local/airflow/operators/
+    volumes:
+      - ./airflow:/usr/local/airflow/dags
+    command: webserver
+volumes:
+  my_dbdata:                      
+
+Строка 
+    volumes:
+      - ./airflow:/usr/local/airflow
+означает что в папке откуда запускаем контейнер (где лежит docker-compose.yml) создаётся папка которая шарится для контейнера,
+и в ней лежат конфиги, а можно сделать чтобы туда класть и даги
+
+# Запускаем:
+
+> docker-compose up -d
+
+Creating network "docker_default" with the default driver
+Creating volume "docker_my_dbdata" with default driver
+Pulling db1 (postgres:11)...
+11: Pulling from library/postgres
+fa1690ae9228: Pull complete
+a73f6e07b158: Pull complete
+973a0c44ddba: Pull complete
+07e5342b01d4: Pull complete
+578aad0862c9: Pull complete
+a0b157088f7a: Pull complete
+6c9046f06fc5: Pull complete
+ae19407bdc48: Pull complete
+71808c4e3b60: Pull complete
+c43648409b9f: Pull complete
+c1a5e1fce088: Pull complete
+557a0805fba2: Pull complete
+e953cab3dee4: Pull complete
+7029159b5f65: Pull complete
+Digest: sha256:4131c293772bbcbe10e4f2f18807a58252d0a4fdc246a467805e19bdc740925e
+Status: Downloaded newer image for postgres:11
+Creating airflow ... done
+Creating pg1     ... done
+Creating pg2     ... done
+
+
+# Проверяем:
+
+> docker ps
+CONTAINER ID   IMAGE                   COMMAND                  CREATED          STATUS          PORTS                                                           NAMES
+4fb143203caa   puckel/docker-airflow   "/entrypoint.sh webs…"   13 minutes ago   Up 13 minutes   5555/tcp, 8793/tcp, 0.0.0.0:8080->8080/tcp, :::8080->8080/tcp   airflow
+4d7ac0b489c7   postgres:11             "docker-entrypoint.s…"   13 minutes ago   Up 13 minutes   0.0.0.0:5433->5432/tcp, :::5433->5432/tcp                       src
+94d6cde57790   postgres:11             "docker-entrypoint.s…"   13 minutes ago   Up 13 minutes   0.0.0.0:54320->5432/tcp, :::54320->5432/tcp                     dst
+
+#------------------------------------
+#Удаление контейнеров и их дисков:
+> docker container ls -qa
+> docker container rm ff75bace6b84
+....
+> docker volume ls
+DRIVER    VOLUME NAME
+local     docker_my_dbdata
+local     lesson-6_my_dbdata
+> docker volume rm docker_my_dbdata
+docker_my_dbdata
+#--------------------------------------
+
+# Создадим в контейнере airflow директорию operators чтобы складывать туда импортируемые модули с наследуемыми классами:
+
+> docker exec -it 4fb143203caa bash
+mkdir operators
+
+# проверяем
+$ python
+Python 3.7.6 (default, Feb  2 2020, 09:11:24)
+[GCC 8.3.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>>
+>>> import sys
+>>> print(sys.path)
+['', '/usr/local/airflow/operators', '/usr/local/lib/python37.zip', '/usr/local/lib/python3.7', '/usr/local/lib/python3.7/lib-dynload', '/usr/local/lib/python3.7/site-packages']
+>>> exit()
+$ pwd
+/usr/local/airflow/operators
+$ ls
+data_transfer.py  postgres.py
+
+# Создадим файл с базовым оператором data_transfer.py, в котором будет определен механизм загрузки данных:
+
+import logging
+import os
+import psycopg2
+from airflow.models import BaseOperator
+from airflow.utils.decorators import apply_defaults
+
+
+class DataTransfer(BaseOperator):
+    @apply_defaults
+    def __init__(self, config, pg_conn_str, *args, **kwargs):
+        super(DataTransfer, self).__init__(
+            *args,
+            **kwargs
+        )
+        self.config = config
+        self.pg_conn_str = pg_conn_str
+
+    def provide_data(self, csv_file, context):
+        pass
+
+
+    def execute(self, context):
+        copy_statement = """
+        COPY {target_schema}.{target_table} ({columns}) FROM STDIN with
+        DELIMITER '\t'
+        CSV
+        ESCAPE '\\'
+        NULL '';
+        """
+        schema_name = "{table}".format(**self.config).split(".")
+        self.config.update(
+            target_schema=schema_name[0],
+            target_table=schema_name[1],
+        )
+        with psycopg2.connect(self.pg_conn_str) as conn, conn.cursor() as cursor:
+            cursor.execute(
+                """
+            select column_name
+              from information_schema.columns
+             where table_schema = '{target_schema}'
+               and table_name = '{target_table}';
+            """.format(
+                    **self.config
+                )
+            )
+            result = cursor.fetchall()
+            columns = ", ".join('"{}"'.format(row) for row, in result)
+            self.config.update(columns=columns)
+
+            with open("transfer.csv", "w", encoding="utf-8") as csv_file:
+                self.provide_data(csv_file, context)
+
+            self.log.info("writing succed")
+
+            with open('transfer.csv', 'r', encoding="utf-8") as f:
+                cursor.copy_expert(copy_statement.format(**self.config), f)
+
+
+# Добавим файл postgres.py, который будет содержать в себе оператор извлечения данных из постгреса:
+
+from data_transfer import DataTransfer
+import csv
+import psycopg2
+
+
+class DataTransferPostgres(DataTransfer):
+    def __init__(
+        self, source_pg_conn_str, query, *args, **kwargs
+    ):
+        super(DataTransferPostgres, self).__init__(
+            source_pg_conn_str=source_pg_conn_str, query=query, *args, **kwargs
+        )
+        self.source_pg_conn_str = source_pg_conn_str
+        self.query = query
+
+    def provide_data(self, csv_file, context):
+        pg_conn = psycopg2.connect(self.source_pg_conn_str)
+        pg_cursor = pg_conn.cursor()
+        query_to_execute = self.query
+        self.log.info("Executing query: {}".format(query_to_execute))
+        pg_cursor.execute(query_to_execute)
+        csvwriter = csv.writer(
+            csv_file,
+            delimiter="\t",
+            quoting=csv.QUOTE_NONE,
+            lineterminator="\n",
+            escapechar='\\'
+        )
+
+        while True:
+            rows = pg_cursor.fetchmany(size=1000)
+            if rows:
+                for row in rows:
+                    _row = list(row)
+                    csvwriter.writerow(_row)
+            else:
+                break
+        pg_conn.close()
+
+
+# Копируем файлы в контейнер:
+docker cp ./data_transfer.py airflow:/usr/local/airflow/operators
+docker cp ./postgres.py airflow:/usr/local/airflow/operators
+
+>>> import sys
+>>> print(sys.path)
+['', '/usr/local/airflow/operators', '/usr/local/lib/python37.zip', '/usr/local/lib/python3.7', '/usr/local/lib/python3.7/lib-dynload', '/usr/local/lib/python3.7/site-packages']
+
+# если питон не видит наших модулей в окружении то можно скопировать прямо в питоновскую папку:
+docker cp ./data_transfer.py airflow:/usr/local/lib/python3.7
+docker cp ./postgres.py airflow:/usr/local/lib/python3.7
+
+
+$ ls
+airflow.cfg  airflow.db  airflow-webserver.pid  dags  logs  operators  unittests.cfg
+$ cd operators
+$ pwd
+/usr/local/airflow/operators
+$ ls
+data_transfer.py  postgres.py
+
+##############################################################################################################
+
+# Создаём БД источник:
+
+> docker exec -it src psql -U root -c "create database srcdb"
+CREATE DATABASE
+
+Копируем файл dss.ddl в контейнер
+docker cp ./dss.ddl src:/
+
+Создаем таблицы из ddl файла
+docker exec -it src psql srcdb -f dss.ddl
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+
+
+# Заходим в контейнер src:
+# ls
+bin   dev                         docker-entrypoint.sh  etc   lib    media  opt   root  sbin  sys  usr
+boot  docker-entrypoint-initdb.d  dss.ddl               home  lib64  mnt    proc  run   srv   tmp  var
+# psql
+psql (11.12 (Debian 11.12-1.pgdg90+1))
+Type "help" for help.
+
+root=# \l
+                             List of databases
+   Name    | Owner | Encoding |  Collate   |   Ctype    | Access privileges
+-----------+-------+----------+------------+------------+-------------------
+ postgres  | root  | UTF8     | en_US.utf8 | en_US.utf8 |
+ root      | root  | UTF8     | en_US.utf8 | en_US.utf8 |
+ srcdb     | root  | UTF8     | en_US.utf8 | en_US.utf8 |
+ template0 | root  | UTF8     | en_US.utf8 | en_US.utf8 | =c/root          +
+           |       |          |            |            | root=CTc/root
+ template1 | root  | UTF8     | en_US.utf8 | en_US.utf8 | =c/root          +
+           |       |          |            |            | root=CTc/root
+(5 rows)
+
+root=# \c srcdb
+You are now connected to database "srcdb" as user "root".
+srcdb=# \dt
+         List of relations
+ Schema |   Name   | Type  | Owner
+--------+----------+-------+-------
+ public | customer | table | root
+ public | lineitem | table | root
+ public | nation   | table | root
+ public | orders   | table | root
+ public | part     | table | root
+ public | partsupp | table | root
+ public | region   | table | root
+ public | supplier | table | root
+(8 rows)
+
+
+Копируем данные в контейнер
+docker cp ./customer.tbl.1 src:/
+# ls
+bin   customer.tbl.1  docker-entrypoint-initdb.d  dss.ddl  home  lib64  mnt  proc  run   srv  tmp  var
+boot  dev             docker-entrypoint.sh        etc      lib   media  opt  root  sbin  sys  usr
+
+Копируем данные их текстового файла в таблицу:
+# psql srcdb -c "\copy customer FROM 'customer.tbl.1' CSV DELIMITER '|'"
+ERROR:  extra data after last expected column
+CONTEXT:  COPY customer, line 1: "1|Customer#000000001|IVhzIApeRb ot,c,E|15|25-989-741-2988|711.56|BUILDING|to the even, regular plate..."
+
+Ошибка - структура таблицы слегка не соответствует данным, надо исправить...
+
+Добавляем доп. колонку для данных в конец таблицы типа varchar и копируем:
+# psql srcdb -c "\copy customer FROM 'customer.tbl.1' CSV DELIMITER '|'"
+COPY 100
+
+
+srcdb=# select * from customer limit 10;
+ c_custkey |       c_name       |               c_address               | c_nationkey |     c_phone     | c_acctbal | c_mktsegment |                                                     c_comment
+                                             | column1
+-----------+--------------------+---------------------------------------+-------------+-----------------+-----------+--------------+----------------------------------------------------------------------
+         1 | Customer#000000001 | IVhzIApeRb ot,c,E                     |          15 | 25-989-741-2988 |    711.56 | BUILDING     | to the even, regular platelets. regular, ironic epitaphs nag e
+                                             |
+         2 | Customer#000000002 | XSTf4,NCwDVaWNe6tEgvwfmRchLXak        |          13 | 23-768-687-3665 |    121.65 | AUTOMOBILE   | l accounts. blithely ironic theodolites integrate boldly: caref
+                                             |
+         3 | Customer#000000003 | MG9kdTD2WBHm                          |           1 | 11-719-748-3364 |   7498.12 | AUTOMOBILE   |  deposits eat slyly ironic, even instructions. express foxes detect s
+lyly. blithely even accounts abov            |
+         4 | Customer#000000004 | XxVSJsLAGtn                           |           4 | 14-128-190-5944 |   2866.83 | MACHINERY    |  requests. final, regular ideas sleep final accou
+                                             |
+         5 | Customer#000000005 | KvpyuHCplrB84WgAiGV6sYpZq7Tj          |           3 | 13-750-942-6364 |    794.47 | HOUSEHOLD    | n accounts will have to unwind. foxes cajole accor
+                                             |
+         6 | Customer#000000006 | sKZz0CsnMD7mp4Xd0YrBvx,LREYKUWAh yVn  |          20 | 30-114-968-4951 |   7638.57 | AUTOMOBILE   | tions. even deposits boost according to the slyly bold packages. fina
+l accounts cajole requests. furious          |
+         7 | Customer#000000007 | TcGe5gaZNgVePxU5kRrvXBfkasDTea        |          18 | 28-190-982-9759 |   9561.95 | AUTOMOBILE   | ainst the ironic, express theodolites. express, even pinto beans amon
+g the exp                                    |
+         8 | Customer#000000008 | I0B10bB0AymmC, 0PrRYBCP1yGJ8xcBPmWhl5 |          17 | 27-147-574-9335 |   6819.74 | BUILDING     | among the slyly regular theodolites kindle blithely courts. carefully
+ even theodolites haggle slyly along the ide |
+         9 | Customer#000000009 | xKiAFTjUsCuxfeleNqefumTrjS            |           8 | 18-338-906-3675 |   8324.07 | FURNITURE    | r theodolites according to the requests wake thinly excuses: pending
+requests haggle furiousl                     |
+        10 | Customer#000000010 | 6LrEaV6KR6PLVcgl2ArL Q3rqzLzcT1 v2    |           5 | 15-741-346-9870 |   2753.54 | HOUSEHOLD    | es regular deposits haggle. fur
+                                             |
+(10 rows)
+
+-----------------------------------------------------------------------------------------------------------
+
+# Данные добавлены!
+
+# Создаём БД хранилища:
+> docker exec -it dst psql -U root -c "create database dstdb"
+CREATE DATABASE
+
+# Копируем файл dss.ddl в контейнер
+> docker cp ./dss.ddl dst:/
+
+# Создаем таблицы из ddl файла
+> docker exec -it dst psql dstdb -f dss.ddl
+
+Проверяем:
+# psql
+psql (11.12 (Debian 11.12-1.pgdg90+1))
+Type "help" for help.
+
+root=# \l
+                             List of databases
+   Name    | Owner | Encoding |  Collate   |   Ctype    | Access privileges
+-----------+-------+----------+------------+------------+-------------------
+ dstdb     | root  | UTF8     | en_US.utf8 | en_US.utf8 |
+ postgres  | root  | UTF8     | en_US.utf8 | en_US.utf8 |
+ root      | root  | UTF8     | en_US.utf8 | en_US.utf8 |
+ template0 | root  | UTF8     | en_US.utf8 | en_US.utf8 | =c/root          +
+           |       |          |            |            | root=CTc/root
+ template1 | root  | UTF8     | en_US.utf8 | en_US.utf8 | =c/root          +
+           |       |          |            |            | root=CTc/root
+(5 rows)
+
+root=# \c dstdb
+You are now connected to database "dstdb" as user "root".
+dstdb=# \dt
+         List of relations
+ Schema |   Name   | Type  | Owner
+--------+----------+-------+-------
+ public | customer | table | root
+
+dstdb=# select * from customer limit 10;
+ c_custkey | c_name | c_address | c_nationkey | c_phone | c_acctbal | c_mktsegment | c_comment | c_adv
+-----------+--------+-----------+-------------+---------+-----------+--------------+-----------+-------
+(0 rows)
+
+##############################################################################################################
+
+# Создадим даг, чтобы протестировать наши операторы:
+
+from airflow import DAG
+from postgres import DataTransferPostgres
+from datetime import datetime
+
+
+DEFAULT_ARGS = {
+    "owner": "airflow",
+    "start_date": datetime(2021, 5, 25),
+    "retries": 1,
+    "email_on_failure": False,
+    "email_on_retry": False,
+    "depends_on_past": True,
+}
+
+with DAG(
+    dag_id="pg-data-flow",
+    default_args=DEFAULT_ARGS,
+    schedule_interval="@daily",
+    max_active_runs=1,
+    tags=['data-flow'],
+) as dag1:
+    t1 = DataTransferPostgres(
+        config={'table': 'public.customer'},
+        query='select * from customer',
+        task_id='customer',
+        source_pg_conn_str="host='db1' port=5432 dbname='srcdb' user='root' password='postgres'",
+        pg_conn_str="host='db2' port=5432 dbname='dstdb' user='root' password='postgres'",
+    )
+
+# Копируем в контейнер airflow:
+docker cp ./dag_lesson6.py airflow:/usr/local/airflow/dags
+(или можно просто держать его в расшареной папке volumes: - ./airflow:/usr/local/airflow/dags)
+
+$ cd dags
+$ pwd
+/usr/local/airflow/dags
+$ ls
+dag_lesson6.py  __pycache__
+
+
+# Заходим на Airflow:
+http://localhost:8080/admin/
+
+
+# Запускаем даг - в шедулере видно что даг запущен, но при попытке старта task_id='customer' появляется надпись:
+
+Only works with the Celery or Kubernetes executors, sorry
