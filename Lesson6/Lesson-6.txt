@@ -29,7 +29,7 @@ version: "3"
 services:
   db1:
     image: "postgres:11"
-    container_name: "pg1"
+    container_name: "src"
     ports:
       - "5433:5432"
     volumes:
@@ -39,7 +39,7 @@ services:
       - POSTGRES_USER=root
   db2:
     image: "postgres:11"
-    container_name: "pg2"
+    container_name: "dst"
     ports:
       - "54320:5432"
     volumes:
@@ -58,7 +58,7 @@ services:
       - ./airflow:/usr/local/airflow/dags
     command: webserver
 volumes:
-  my_dbdata:                      
+  my_dbdata:                           
 
 Строка 
     volumes:
