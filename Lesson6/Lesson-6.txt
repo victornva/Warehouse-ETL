@@ -472,3 +472,5 @@ aref                                        |
          3 | Customer#000000003 | MG9kdTD2WBHm                   |           1 | 11-719-748-3364 |   7498.12 | AUTOMOBILE   |  deposits eat slyly ironic, even instructions. express foxe
 s detect slyly. blithely even accounts abov |
 (3 rows)
+
+Данные перенесены, остальные таблицы переносим аналогично.
