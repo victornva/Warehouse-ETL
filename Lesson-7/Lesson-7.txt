@@ -53,7 +53,7 @@ PS C:\Distrib\GB\ХД&ETL\Lesson-7> docker cp ./postgres_ge.py airflow:/usr/loca
 docker cp ./dag_ge.py airflow:/usr/local/airflow/dags
 
 
-
+http://localhost:8080/admin/
 
 
 
