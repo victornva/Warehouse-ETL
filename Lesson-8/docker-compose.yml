@@ -1,0 +1,24 @@
+version: "3"
+services:
+  db8:
+    image: "postgres:11"
+    container_name: "pgdb"
+    ports:
+      - "5433:5432"
+    volumes:
+      - my_dbdata:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=root
+  airflow8:
+    image: puckel/docker-airflow
+    container_name: "airflow8"
+    ports:
+      - "8080:8080"
+    environment:
+      - PYTHONPATH=/usr/local/airflow/operators/
+    volumes:
+      - ./airflow:/usr/local/airflow/dags
+    command: webserver
+volumes:
+  my_dbdata:                      

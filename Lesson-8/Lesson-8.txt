@@ -1,0 +1,165 @@
+##############################################################################################################
+# Урок 8
+# ETL
+##############################################################################################################
+
+
+Создадим файл docker-compose.yml:
+
+version: "3"
+services:
+  db8:
+    image: "postgres:11"
+    container_name: "pgdb"
+    ports:
+      - "5433:5432"
+    volumes:
+      - my_dbdata:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=root
+  airflow8:
+    image: puckel/docker-airflow
+    container_name: "airflow8"
+    ports:
+      - "8080:8080"
+    environment:
+      - PYTHONPATH=/usr/local/airflow/operators/
+    volumes:
+      - ./airflow:/usr/local/airflow/dags
+    command: webserver
+volumes:
+  my_dbdata: 
+
+--------------------------------------------------------------------------------------------------
+В docker-compose.yml:
+
+services: - имя сервиса используемое для доступа к контейнеру извне
+container_name: - имя контейнера используемое для изнутри
+
+hostname: 
+just sets what the container believes its own hostname is. In the unusual event you got a shell inside the container, it might show up in the prompt. 
+It has no effect on anything outside, and there’s usually no point in setting it. 
+(It has basically the same effect as hostname(1): that command doesn’t cause anything outside your host to know the name you set.)
+
+container_name: 
+sets the actual name of the container when it runs, rather than letting Docker Compose generate it. 
+If this name is different from the name of the block in services:, both names will be usable as DNS names for inter-container communication. 
+Unless you need to use docker to manage a container that Compose started, you usually don’t need to set this either.
+
+If you omit both of these settings, one container can reach another (provided they’re in the same Docker Compose file and have compatible networks: settings) 
+using the name of the services: block and the port the service inside the container is listening in.
+
+Строка 
+    volumes:
+      - ./airflow:/usr/local/airflow
+означает что в папке откуда запускаем контейнер (где лежит docker-compose.yml) создаётся папка которая шарится для контейнера,
+и в ней лежат конфиги, а можно сделать чтобы туда класть и даги
+
+Строка 
+    ports:
+      - "5433:5432"
+Снаружи обращаемся по порту 5433 к порту 5432 внутри
+--------------------------------------------------------------------------------------------------
+#Удаление контейнеров и их дисков:
+> docker container ls -qa
+> docker container rm ff75bace6b84
+....
+> docker volume ls
+DRIVER    VOLUME NAME
+local     docker_my_dbdata
+local     lesson-6_my_dbdata
+> docker volume rm docker_my_dbdata
+docker_my_dbdata
+--------------------------------------------------------------------------------------------------
+
+# Запускаем:
+
+> docker-compose up -d
+
+--------------------------------------------------------------------------------------------------
+Заходим в CLI Airflow:
+
+$ python
+Python 3.7.6 (default, Feb  2 2020, 09:11:24)
+[GCC 8.3.0] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>>
+>>> import sys
+>>> print(sys.path)
+['', '/usr/local/airflow/operators', '/usr/local/lib/python37.zip', '/usr/local/lib/python3.7', '/usr/local/lib/python3.7/lib-dynload', '/usr/local/lib/python3.7/site-packages']
+
+chown airflow:airflow /usr/local/airflow/operators
+chown -R airflow:airflow /usr/local/airflow/operators
+chown airflow /usr/local/airflow/operators
+chown airflow:airflow operators
+
+# Копируем файлы в контейнер:
+docker cp ./utils8.py airflow8:/usr/local/lib/python3.7
+docker cp ./layers.py airflow8:/usr/local/lib/python3.7
+docker cp ./postgres-8.py airflow8:/usr/local/lib/python3.7
+docker cp ./data_transfer-8.py airflow8:/usr/local/lib/python3.7
+
+
+
+docker cp ./shema.yaml airflow8:/usr/local/lib/python3.7
+docker cp ./shema.yaml airflow8:/usr/local/airflow/operators
+
+##############################################################################################################
+
+# Создаём БД :
+
+root=# create database srcdb;
+CREATE DATABASE
+root=# create database dstdb;
+CREATE DATABASE
+root=# \l
+                             List of databases
+   Name    | Owner | Encoding |  Collate   |   Ctype    | Access privileges
+-----------+-------+----------+------------+------------+-------------------
+ dstdb     | root  | UTF8     | en_US.utf8 | en_US.utf8 |
+ postgres  | root  | UTF8     | en_US.utf8 | en_US.utf8 |
+ root      | root  | UTF8     | en_US.utf8 | en_US.utf8 |
+ srcdb     | root  | UTF8     | en_US.utf8 | en_US.utf8 |
+
+копируем файл dss.ddl в контейнер
+docker cp ./dss.ddl pgdb:/
+
+cоздаем таблицы из ddl файла
+# psql srcdb -f dss.ddl
+CREATE TABLE
+...
+
+Копируем данные в контейнер
+docker cp ./customer.tbl.1 pgdb:/
+docker cp ./orders.tbl.1 pgdb:/
+docker cp ./lineitem.tbl.1 pgdb:/
+docker cp ./part.tbl.1 pgdb:/
+docker cp ./partsupp.tbl.1 pgdb:/
+docker cp ./supplier.tbl.1 pgdb:/
+
+Копируем данные их текстового файла в таблицу:
+# psql srcdb -c "\copy customer FROM 'customer.tbl.1' CSV DELIMITER '|'"
+COPY 100
+# psql srcdb -c "\copy orders FROM 'orders.tbl.1' CSV DELIMITER '|'"
+# psql srcdb -c "\copy lineitem FROM 'lineitem.tbl.1' CSV DELIMITER '|'"
+# psql srcdb -c "\copy part FROM 'part.tbl.1' CSV DELIMITER '|'"
+# psql srcdb -c "\copy partsupp FROM 'partsupp.tbl.1' CSV DELIMITER '|'"
+# psql srcdb -c "\copy supplier FROM 'supplier.tbl.1' CSV DELIMITER '|'"
+.....
+
+
+cоздаем таблицы из ddl файла
+# psql dstdb -f dss.ddl
+
+create database dds;
+
+create table dds.h_customer (
+    customer_id SERIAL PRIMARY KEY,
+    customer_bk int,
+    launch_id int,
+    UNIQUE(customer_bk)
+);
+
+
+  
